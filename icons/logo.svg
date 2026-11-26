@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Opponent Notebook">
+  <rect width="64" height="64" rx="14" fill="#1B5D45"/>
+  <g fill="none" stroke="#F6E8C8" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 9v11"/>
+    <path d="M26.5 14.5h11"/>
+  </g>
+  <path fill="#F6E8C8" d="M22 23.5h20l-2.2 4.2H24.2z"/>
+  <path fill="#F6E8C8" d="M25.5 28h13l3.2 15.5H22.3z"/>
+  <rect x="18" y="43.8" width="28" height="3.8" rx="1.4" fill="#F6E8C8"/>
+  <rect x="15.5" y="48.4" width="33" height="5.2" rx="1.8" fill="#F6E8C8"/>
+</svg>
