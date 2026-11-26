@@ -213,6 +213,107 @@ function lastPlayedLabel(opp, otbGames) {
   return "No games yet";
 }
 
+
+function gameOppName(g, byId) {
+  const opp = g.opponentId ? byId[g.opponentId] : null;
+  if (opp) return opp.name;
+  return g.opponentName || "";
+}
+
+function unlinkedGames(otb, opponents) {
+  const ids = new Set(opponents.map((o) => o.id));
+  return otb.filter((g) => !g.opponentId || !ids.has(g.opponentId)).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+
+function closeDialog() {
+  document.querySelectorAll(".modal-backdrop").forEach((n) => n.remove());
+}
+
+function showDialog({ title, body, extra = "", confirmLabel = "Delete", danger = true }) {
+  closeDialog();
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal-backdrop";
+    wrap.setAttribute("role", "dialog");
+    wrap.setAttribute("aria-modal", "true");
+    wrap.innerHTML = `<div class="dialog">
+      <h2>${esc(title)}</h2>
+      <p>${body}</p>
+      ${extra}
+      <div class="dialog-actions">
+        <button type="button" class="btn secondary" data-dlg="cancel">Cancel</button>
+        <button type="button" class="btn${danger ? " danger" : ""}" data-dlg="ok">${esc(confirmLabel)}</button>
+      </div>
+    </div>`;
+    const finish = (val) => {
+      document.removeEventListener("keydown", onKey);
+      wrap.remove();
+      resolve(val);
+    };
+    const onKey = (e) => { if (e.key === "Escape") finish(null); };
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap || e.target.closest("[data-dlg=cancel]")) finish(null);
+      else if (e.target.closest("[data-dlg=ok]")) finish(wrap);
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(wrap);
+    wrap.querySelector("[data-dlg=cancel]")?.focus();
+  });
+}
+
+async function confirmDeleteOpponent(opp, otbCount) {
+  const extra = otbCount
+    ? `<div class="dialog-choices">
+        <label><input type="radio" name="otb-fate" value="keep" checked>
+          <span><div class="choice-title">Keep my over-the-board games</div>
+          <div class="choice-sub">They stay on this device, unlinked from this card. They still show in My lines and Patterns.</div></span>
+        </label>
+        <label><input type="radio" name="otb-fate" value="delete">
+          <span><div class="choice-title">Also delete my over-the-board games vs them</div>
+          <div class="choice-sub">Notes, tags, and those scoresheets are removed from this device.</div></span>
+        </label>
+      </div>`
+    : "";
+  const body = `This removes ${esc(opp.name)} and any cached online games pulled for them from this device.` +
+    (otbCount ? ` You have ${otbCount} over-the-board game${otbCount === 1 ? "" : "s"} vs them.` : "");
+  const el = await showDialog({
+    title: `Delete ${opp.name}?`,
+    body,
+    extra,
+    confirmLabel: "Delete opponent",
+  });
+  if (!el) return null;
+  const choice = el.querySelector('input[name="otb-fate"]:checked');
+  return { deleteOtb: choice ? choice.value === "delete" : false };
+}
+
+async function confirmDeleteGame(g) {
+  const el = await showDialog({
+    title: "Delete this game?",
+    body: `This removes the over-the-board game${g.event ? " “" + esc(g.event) + "”" : ""}${g.date ? " (" + esc(fmtDate(g.date)) + ")" : ""} from this device, including your notes and tags. This cannot be undone.`,
+    confirmLabel: "Delete game",
+  });
+  return !!el;
+}
+
+async function deleteOpponentRecord(opp, { deleteOtb }) {
+  const online = await db.getByOpponent("online", opp.id);
+  for (const g of online) await db.remove("online", g.id);
+  const mine = await db.getByOpponent("otb", opp.id);
+  if (deleteOtb) {
+    for (const g of mine) await db.remove("otb", g.id);
+  } else {
+    for (const g of mine) {
+      await db.put("otb", { ...g, opponentId: "", opponentName: g.opponentName || opp.name });
+    }
+  }
+  await db.remove("opponents", opp.id);
+}
+
+async function deleteOtbGame(id) {
+  await db.remove("otb", id);
+}
+
 function renderOpponents({ opponents, otb }, { q = "" } = {}) {
   const query = q.trim().toLowerCase();
   const rows = opponents.filter((o) => {
@@ -241,6 +342,20 @@ function renderOpponents({ opponents, otb }, { q = "" } = {}) {
            <p>Add someone you already know you’ll face, or look up a Lichess or Chess.com username. The notebook starts empty.</p>
          </div>`;
 
+  const loose = unlinkedGames(otb, opponents);
+  const unlinkedBlock = loose.length
+    ? `<div class="card section-gap" id="unlinked-games">
+        <h2 class="section-title">Games without an opponent card</h2>
+        <p class="hint">Kept when you deleted a card and left your over-the-board games. They still count in My lines and Patterns.</p>
+        ${loose.map((g) => `<div class="otb-item" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+          <div class="game-title">${g.opponentName ? "vs " + esc(g.opponentName) : "Unlinked game"}${g.event ? " · " + esc(g.event) : ""}${g.date ? " · " + esc(fmtDate(g.date)) : ""}</div>
+          <div class="game-meta">You: ${g.color === "white" ? "White" : "Black"}</div>
+          ${g.notes ? `<p class="quote">${esc(g.notes)}</p>` : ""}
+          <div class="game-actions"><button type="button" class="btn tiny danger" data-act="delete-game" data-id="${g.id}">Delete game</button></div>
+        </div>`).join("")}
+      </div>`
+    : "";
+
   $app.className = "";
   $app.innerHTML = `
     ${appbar({ active: "opponents" })}
@@ -254,6 +369,7 @@ function renderOpponents({ opponents, otb }, { q = "" } = {}) {
       <a class="btn" href="#/opponents/new" style="margin:0 0 14px;height:46px;font-size:15px;box-shadow:none;text-decoration:none">+ Add opponent</a>
       <div class="opp-list">${list}</div>
       <p class="hint" style="margin-top:12px">Record is your W–D–L against them over the board. Online games are pulled only when you ask, and cached on this device.</p>
+      ${unlinkedBlock}
       <details class="device-tools">
         <summary>This device</summary>
         <p class="hint">All data stays in this browser. You can download a backup and load it on another device. There are no analytics.</p>
@@ -426,6 +542,7 @@ function renderCard(opp, { otb, online }, { pulling = false, pullMsg = "", treeC
             ${g.notes ? `<p class="quote">${esc(g.notes)}</p>` : ""}
             <div class="chip-row" style="margin-top:8px">${(g.tags || []).map((t) => tagChip(t)).join("")}</div>
             ${analyzing}${sug}
+            <div class="game-actions"><button type="button" class="btn tiny danger" data-act="delete-game" data-id="${g.id}">Delete game</button></div>
           </div>`;
         })
         .join("")
@@ -466,6 +583,10 @@ function renderCard(opp, { otb, online }, { pulling = false, pullMsg = "", treeC
         ${otbList}
       </div>
       <a class="btn secondary section-gap" style="margin-top:14px;text-decoration:none" href="#/game?opponent=${encodeURIComponent(opp.id)}">Add an OTB game</a>
+      <div class="danger-zone">
+        <p class="hint">Deleting this card also removes cached online games for them. You can keep your over-the-board games, unlinked.</p>
+        <button type="button" class="btn danger" data-act="delete-opponent" data-id="${opp.id}">Delete opponent</button>
+      </div>
     </main>
     ${tabbar("opponents")}`;
 }
@@ -508,10 +629,22 @@ function renderAddGame(opponents, form, { error } = {}) {
             <input class="input" id="date" name="date" type="date" value="${esc(form.date || "")}"/>
           </div>
         </div>
-        <div>
-          <label class="field-label" for="pgn">Moves (PGN or typed)</label>
-          <textarea class="input" id="pgn" name="pgn" placeholder="1. e4 e5 2. Nf3 …">${esc(form.pgn || "")}</textarea>
-          <p class="hint">From ScanChess, InkPGN, or type SAN from the sheet.</p>
+        <div class="pgn-block">
+          <div class="pgn-field">
+            <div class="field-head">
+              <label class="field-label" for="pgn">Moves (PGN or typed)</label>
+              <button type="button" class="btn tiny secondary" data-act="paste-pgn">Paste</button>
+            </div>
+            <textarea class="input" id="pgn" name="pgn" placeholder="1. e4 e5 2. Nf3 …">${esc(form.pgn || "")}</textarea>
+          </div>
+          <div class="scan-sheet">
+            <div class="scan-title">Scan sheet</div>
+            <div class="scan-actions">
+              <a class="btn small secondary" href="https://inkpgn.com/" target="_blank" rel="noopener noreferrer">InkPGN</a>
+              <a class="btn small secondary" href="https://scanchess.com/" target="_blank" rel="noopener noreferrer">ScanChess</a>
+            </div>
+            <p class="hint">Photograph the sheet there, fix any misread moves, copy the PGN, paste it here.</p>
+          </div>
         </div>
         <div class="grid-2">
           <div>
@@ -576,9 +709,9 @@ function renderLines({ opponents, otb }) {
         const r = otbRecord(gs);
         const bits = gs
           .map((g) => {
-            const opp = byId[g.opponentId];
+            const name = gameOppName(g, byId);
             const note = g.notes ? ` Your note: “${g.notes}”.` : "";
-            return `vs ${opp ? opp.name : "unknown"}${g.result ? ", " + resultText(g.result).toLowerCase() : ""}.${note}`;
+            return `vs ${name || "unknown"}${g.result ? ", " + resultText(g.result).toLowerCase() : ""}.${note}`;
           })
           .join(" ");
         return `<div class="line-row"><div><div class="open">${esc(name)}</div><p>${esc(bits)}</p></div><div class="rep-stat">${esc(r.text)}</div></div>`;
@@ -594,9 +727,9 @@ function renderLines({ opponents, otb }) {
   const featured = otb.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
   if (featured && featured.moves?.length) {
     const pos = fenAfter(featured.moves);
-    const opp = byId[featured.opponentId];
+    const name = gameOppName(featured, byId);
     board = `<div class="section-gap board-block">${boardHTML(pos.fen, { lastMove: pos.lastMove, flipped: featured.color === "black", aria: "Latest typed game" })}
-      <p class="board-cap">Latest typed game${opp ? " vs " + opp.name : ""}${featured.date ? ", " + fmtDate(featured.date) : ""}. You were ${featured.color === "white" ? "White" : "Black"}.</p>
+      <p class="board-cap">Latest typed game${name ? " vs " + name : ""}${featured.date ? ", " + fmtDate(featured.date) : ""}. You were ${featured.color === "white" ? "White" : "Black"}.</p>
     </div>`;
   }
 
@@ -625,8 +758,8 @@ function renderPatterns({ opponents, otb, online }) {
   const studyBits = [];
   for (const g of theory) {
     const name = openingName(g.moves || []) || "an un-named line";
-    const opp = byId[g.opponentId];
-    studyBits.push(`${name}${opp ? " vs " + opp.name : ""}`);
+    const oname = gameOppName(g, byId);
+    studyBits.push(`${name}${oname ? " vs " + oname : ""}`);
   }
   const swings = otb.filter((g) => g.analysis && g.analysis.swing).slice(0, 2);
   const study = `<div class="card study">
@@ -639,8 +772,8 @@ function renderPatterns({ opponents, otb, online }) {
     <p class="fallback">Default suggestion when no note: first big swing + the book line you left.${
       swings.length
         ? " " + swings.map((g) => {
-            const opp = byId[g.opponentId];
-            return (opp ? opp.name + ": " : "") + (g.analysis.swingText || "");
+            const oname = gameOppName(g, byId);
+            return (oname ? oname + ": " : "") + (g.analysis.swingText || "");
           }).join(" ")
         : otb.length
           ? " Run the engine on a saved game to fill that in."
@@ -649,7 +782,7 @@ function renderPatterns({ opponents, otb, online }) {
   </div>`;
 
   function gameCard(g, extraChips = null) {
-    const opp = byId[g.opponentId];
+    const oname = gameOppName(g, byId);
     const chips = (extraChips || g.tags || []).map((t) => tagChip(t)).join("");
     let learn = "";
     if ((g.tags || []).includes("theory-gap") && g.moves?.length) {
@@ -662,7 +795,7 @@ function renderPatterns({ opponents, otb, online }) {
     }
     return `<div class="card pattern-card">
       <div>
-        <div class="game-title">${opp ? "vs " + esc(opp.name) : "Game"}</div>
+        <div class="game-title">${oname ? "vs " + esc(oname) : "Game"}</div>
         <div class="game-meta">You: ${g.color === "white" ? "White" : "Black"}${g.event ? " · " + esc(g.event) : ""}${g.date ? " · " + esc(fmtDate(g.date)) : ""}</div>
         <div class="chip-row" style="margin-top:8px">${chips}</div>
       </div>
@@ -705,7 +838,7 @@ async function runAnalysisFor(game) {
   rerenderQuiet();
   try {
     await initEngine();
-    const online = await db.getByOpponent("online", game.opponentId);
+    const online = game.opponentId ? await db.getByOpponent("online", game.opponentId) : [];
     const oppColorIsWhite = game.color === "black";
     const pool = online.filter((g) => g.known && g.isWhite === oppColorIsWhite);
     const tree = buildTree(pool);
@@ -719,8 +852,10 @@ async function runAnalysisFor(game) {
     });
     const swingText = describeSwing(result.swing, game.color === "white");
     const departureText = describeDeparture(game.moves, ref);
+    const still = await db.getById("otb", game.id);
+    if (!still) return;
     const updated = {
-      ...game,
+      ...still,
       analysis: {
         depth: 12,
         swing: result.swing,
@@ -735,7 +870,9 @@ async function runAnalysisFor(game) {
     };
     await db.put("otb", updated);
   } catch (e) {
-    const updated = { ...game, analysisError: "The engine could not finish (“" + (e && e.message ? e.message : "error") + "”). You can try again. This runs entirely on this device." };
+    const still = await db.getById("otb", game.id);
+    if (!still) return;
+    const updated = { ...still, analysisError: "The engine could not finish (“" + (e && e.message ? e.message : "error") + "”). You can try again. This runs entirely on this device." };
     await db.put("otb", updated);
   } finally {
     analyzingIds.delete(game.id);
@@ -968,6 +1105,59 @@ $app.addEventListener("click", async (e) => {
   if (act === "analyze") {
     const g = await db.getById("otb", btn.dataset.id);
     if (g) runAnalysisFor(g);
+    return;
+  }
+  if (act === "delete-opponent") {
+    const id = btn.dataset.id;
+    const opp = await db.getById("opponents", id);
+    if (!opp) return;
+    const mine = await db.getByOpponent("otb", opp.id);
+    const choice = await confirmDeleteOpponent(opp, mine.length);
+    if (!choice) return;
+    await deleteOpponentRecord(opp, choice);
+    toast(choice.deleteOtb ? "Opponent and their OTB games removed." : "Opponent removed. Your OTB games were kept.");
+    go("#/opponents");
+    render();
+    return;
+  }
+  if (act === "delete-game") {
+    const g = await db.getById("otb", btn.dataset.id);
+    if (!g) return;
+    const ok = await confirmDeleteGame(g);
+    if (!ok) return;
+    await deleteOtbGame(g.id);
+    toast("Game removed from this device.");
+    render();
+    return;
+  }
+  if (act === "paste-pgn") {
+    const form = $app.querySelector('[data-form="add-game"]');
+    if (form) readAddGameForm(form);
+    const ta = $app.querySelector("#pgn");
+    if (!ta) return;
+    const apply = (text) => {
+      const value = String(text ?? "");
+      if (!value.trim()) {
+        toast("Clipboard is empty.");
+        return false;
+      }
+      ta.value = value;
+      pageState.addForm = { ...pageState.addForm, pgn: value };
+      toast("Pasted.");
+      return true;
+    };
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.readText === "function") {
+        const text = await navigator.clipboard.readText();
+        apply(text);
+        return;
+      }
+    } catch {
+      /* fall through to a manual paste */
+    }
+    ta.focus();
+    toast("Couldn’t read the clipboard. Long-press or tap the box and paste.");
+    return;
   }
 });
 
