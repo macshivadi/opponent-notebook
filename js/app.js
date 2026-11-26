@@ -24,7 +24,7 @@ function toast(msg) {
   t.className = "toast";
   t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2800);
+  setTimeout(() => t.remove(), 2000);
 }
 
 /* ---------- routing ---------- */
@@ -150,6 +150,19 @@ function fmtDate(s) {
   return `${months[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`;
 }
 
+/** Format a timestamp in the viewer's local time zone (not UTC). */
+function fmtLocalStamp(ms) {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
 /* ---------- lock ---------- */
 function renderLock(error) {
   $app.className = "locked";
@@ -196,7 +209,7 @@ function lastPlayedLabel(opp, otbGames) {
   const dates = otbGames.map((g) => g.date).filter(Boolean).sort();
   const last = dates[dates.length - 1];
   if (last) return `Last played ${fmtDate(last)}`;
-  if (opp.lastFetchedAt) return `Online games refreshed ${fmtDate(new Date(opp.lastFetchedAt).toISOString().slice(0, 10))}`;
+  if (opp.lastFetchedAt) return `Online games refreshed ${fmtLocalStamp(opp.lastFetchedAt)}`;
   return "No games yet";
 }
 
